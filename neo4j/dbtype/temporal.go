@@ -19,6 +19,7 @@ package dbtype
 
 import (
 	"fmt"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/packstream"
 	"time"
 )
 
@@ -30,6 +31,16 @@ type (
 	LocalTime     time.Time // Time since start of day in local timezone
 	LocalDateTime time.Time // Date and time in local timezone
 )
+
+// SerializeNeo4j serializes this LocalDateTime into the Packer.
+func (t LocalDateTime) SerializeNeo4j(p packstream.Packer) {
+	tt := time.Time(t)
+	_, offset := tt.Zone()
+	secs := tt.Unix() + int64(offset)
+	p.StructHeader('d', 2)
+	p.Int64(secs)
+	p.Int(tt.Nanosecond())
+}
 
 // Time casts LocalDateTime to time.Time
 //
@@ -43,6 +54,17 @@ func (t LocalDateTime) Time() time.Time {
 // `YYYY-MM-DDThh:mm:ss.nnnnnnnnn`.
 func (t LocalDateTime) String() string {
 	return t.Time().Format("2006-01-02T15:04:05.999999999")
+}
+
+// SerializeNeo4j serializes this LocalTime into the Packer.
+func (t LocalTime) SerializeNeo4j(p packstream.Packer) {
+	tt := time.Time(t)
+	nanos := int64(time.Hour)*int64(tt.Hour()) +
+		int64(time.Minute)*int64(tt.Minute()) +
+		int64(time.Second)*int64(tt.Second()) +
+		int64(tt.Nanosecond())
+	p.StructHeader('t', 1)
+	p.Int64(nanos)
 }
 
 // Time casts LocalTime to time.Time
@@ -59,6 +81,17 @@ func (t LocalTime) String() string {
 	return t.Time().Format("15:04:05.999999999")
 }
 
+// SerializeNeo4j serializes this Date into the Packer.
+func (t Date) SerializeNeo4j(p packstream.Packer) {
+	tt := time.Time(t)
+	secs := tt.Unix()
+	_, offset := tt.Zone()
+	secs += int64(offset)
+	days := secs / (60 * 60 * 24)
+	p.StructHeader('D', 1)
+	p.Int64(days)
+}
+
 // Time casts Date to time.Time
 func (t Date) Time() time.Time {
 	return time.Time(t)
@@ -68,6 +101,17 @@ func (t Date) Time() time.Time {
 // `YYYY-MM-DD`.
 func (t Date) String() string {
 	return t.Time().Format("2006-01-02")
+}
+
+// SerializeNeo4j serializes this Time into the Packer.
+func (t Time) SerializeNeo4j(p packstream.Packer) {
+	tt := time.Time(t)
+	_, tzOffsetSecs := tt.Zone()
+	d := tt.Sub(
+		time.Date(tt.Year(), tt.Month(), tt.Day(), 0, 0, 0, 0, tt.Location()))
+	p.StructHeader('T', 2)
+	p.Int64(d.Nanoseconds())
+	p.Int(tzOffsetSecs)
 }
 
 // Time casts Time to time.Time
@@ -88,6 +132,15 @@ type Duration struct {
 	Days    int64
 	Seconds int64
 	Nanos   int
+}
+
+// SerializeNeo4j serializes this Duration into the Packer.
+func (d Duration) SerializeNeo4j(p packstream.Packer) {
+	p.StructHeader('E', 4)
+	p.Int64(d.Months)
+	p.Int64(d.Days)
+	p.Int64(d.Seconds)
+	p.Int(d.Nanos)
 }
 
 // String returns the string representation of this Duration in ISO-8601 compliant form.

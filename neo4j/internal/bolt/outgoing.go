@@ -19,15 +19,14 @@ package bolt
 
 import (
 	"context"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/db"
 	idb "github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/db"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/packstream"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/log"
+	pubpackstream "github.com/neo4j/neo4j-go-driver/v5/neo4j/packstream"
 	"io"
 	"reflect"
 	"time"
-
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/db"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/packstream"
 )
 
 type outgoing struct {
@@ -37,7 +36,6 @@ type outgoing struct {
 	onIoErr    func(context.Context, error)
 	boltLogger log.BoltLogger
 	logId      string
-	useUtc     bool
 }
 
 func (o *outgoing) begin() {
@@ -282,79 +280,8 @@ func (o *outgoing) packMap(m map[string]any) {
 
 func (o *outgoing) packStruct(x any) {
 	switch v := x.(type) {
-	case *dbtype.Point2D:
-		o.packer.StructHeader('X', 3)
-		o.packer.Uint32(v.SpatialRefId)
-		o.packer.Float64(v.X)
-		o.packer.Float64(v.Y)
-	case dbtype.Point2D:
-		o.packer.StructHeader('X', 3)
-		o.packer.Uint32(v.SpatialRefId)
-		o.packer.Float64(v.X)
-		o.packer.Float64(v.Y)
-	case *dbtype.Point3D:
-		o.packer.StructHeader('Y', 4)
-		o.packer.Uint32(v.SpatialRefId)
-		o.packer.Float64(v.X)
-		o.packer.Float64(v.Y)
-		o.packer.Float64(v.Z)
-	case dbtype.Point3D:
-		o.packer.StructHeader('Y', 4)
-		o.packer.Uint32(v.SpatialRefId)
-		o.packer.Float64(v.X)
-		o.packer.Float64(v.Y)
-		o.packer.Float64(v.Z)
 	case time.Time:
-		if o.useUtc {
-			if zone, _ := v.Zone(); zone == "Offset" {
-				o.packUtcDateTimeWithTzOffset(v)
-			} else {
-				o.packUtcDateTimeWithTzName(v)
-			}
-			break
-		}
-		if zone, _ := v.Zone(); zone == "Offset" {
-			o.packLegacyDateTimeWithTzOffset(v)
-		} else {
-			o.packLegacyDateTimeWithTzName(v)
-		}
-	case dbtype.LocalDateTime:
-		t := time.Time(v)
-		_, offset := t.Zone()
-		secs := t.Unix() + int64(offset)
-		o.packer.StructHeader('d', 2)
-		o.packer.Int64(secs)
-		o.packer.Int(t.Nanosecond())
-	case dbtype.Date:
-		t := time.Time(v)
-		secs := t.Unix()
-		_, offset := t.Zone()
-		secs += int64(offset)
-		days := secs / (60 * 60 * 24)
-		o.packer.StructHeader('D', 1)
-		o.packer.Int64(days)
-	case dbtype.Time:
-		t := time.Time(v)
-		_, tzOffsetSecs := t.Zone()
-		d := t.Sub(
-			time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()))
-		o.packer.StructHeader('T', 2)
-		o.packer.Int64(d.Nanoseconds())
-		o.packer.Int(tzOffsetSecs)
-	case dbtype.LocalTime:
-		t := time.Time(v)
-		nanos := int64(time.Hour)*int64(t.Hour()) +
-			int64(time.Minute)*int64(t.Minute()) +
-			int64(time.Second)*int64(t.Second()) +
-			int64(t.Nanosecond())
-		o.packer.StructHeader('t', 1)
-		o.packer.Int64(nanos)
-	case dbtype.Duration:
-		o.packer.StructHeader('E', 4)
-		o.packer.Int64(v.Months)
-		o.packer.Int64(v.Days)
-		o.packer.Int64(v.Seconds)
-		o.packer.Int(v.Nanos)
+		o.packer.Time(v)
 	default:
 		o.onPackErr(&db.UnsupportedTypeError{Type: reflect.TypeOf(x)})
 	}
@@ -363,6 +290,11 @@ func (o *outgoing) packStruct(x any) {
 func (o *outgoing) packX(x any) {
 	if x == nil {
 		o.packer.Nil()
+		return
+	}
+
+	if v, ok := x.(interface{ SerializeNeo4j(pubpackstream.Packer) }); ok {
+		v.SerializeNeo4j(&o.packer)
 		return
 	}
 
@@ -385,14 +317,7 @@ func (o *outgoing) packX(x any) {
 			o.packer.Nil()
 			return
 		}
-		// Inspect what the pointer points to
-		i := reflect.Indirect(v)
-		switch i.Kind() {
-		case reflect.Struct:
-			o.packStruct(x)
-		default:
-			o.packX(i.Interface())
-		}
+		o.packX(v.Elem().Interface())
 	case reflect.Struct:
 		o.packStruct(x)
 	case reflect.Slice:
@@ -408,6 +333,11 @@ func (o *outgoing) packX(x any) {
 			o.packer.Strings(s)
 		case []float64:
 			o.packer.Float64s(s)
+		case []any:
+			o.packer.ArrayHeader(len(s))
+			for _, e := range s {
+				o.packX(e)
+			}
 		default:
 			num := v.Len()
 			o.packer.ArrayHeader(num)
@@ -422,6 +352,12 @@ func (o *outgoing) packX(x any) {
 			o.packer.IntMap(m)
 		case map[string]string:
 			o.packer.StringMap(m)
+		case map[string]any:
+			o.packer.MapHeader(len(m))
+			for k, v := range m {
+				o.packer.String(k)
+				o.packX(v)
+			}
 		default:
 			t := reflect.TypeOf(x)
 			if t.Key().Kind() != reflect.String {
@@ -429,46 +365,13 @@ func (o *outgoing) packX(x any) {
 				return
 			}
 			o.packer.MapHeader(v.Len())
-			// TODO Use MapRange when min Go version is >= 1.12
-			for _, ki := range v.MapKeys() {
-				o.packer.String(ki.String())
-				o.packX(v.MapIndex(ki).Interface())
+			r := v.MapRange()
+			for r.Next() {
+				o.packer.String(r.Key().String())
+				o.packX(r.Value().Interface())
 			}
 		}
 	default:
 		o.onPackErr(&db.UnsupportedTypeError{Type: reflect.TypeOf(x)})
 	}
-}
-
-// deprecated: remove once 4.x Neo4j all reach EOL
-func (o *outgoing) packLegacyDateTimeWithTzOffset(dateTime time.Time) {
-	_, offset := dateTime.Zone()
-	o.packer.StructHeader('F', 3)
-	o.packer.Int64(dateTime.Unix() + int64(offset))
-	o.packer.Int(dateTime.Nanosecond())
-	o.packer.Int(offset)
-}
-
-// deprecated: remove once 4.x Neo4j all reach EOL
-func (o *outgoing) packLegacyDateTimeWithTzName(dateTime time.Time) {
-	_, offset := dateTime.Zone()
-	o.packer.StructHeader('f', 3)
-	o.packer.Int64(dateTime.Unix() + int64(offset))
-	o.packer.Int(dateTime.Nanosecond())
-	o.packer.String(dateTime.Location().String())
-}
-
-func (o *outgoing) packUtcDateTimeWithTzOffset(dateTime time.Time) {
-	_, offset := dateTime.Zone()
-	o.packer.StructHeader('I', 3)
-	o.packer.Int64(dateTime.Unix())
-	o.packer.Int(dateTime.Nanosecond())
-	o.packer.Int(offset)
-}
-
-func (o *outgoing) packUtcDateTimeWithTzName(dateTime time.Time) {
-	o.packer.StructHeader('i', 3)
-	o.packer.Int64(dateTime.Unix())
-	o.packer.Int(dateTime.Nanosecond())
-	o.packer.String(dateTime.Location().String())
 }

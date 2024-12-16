@@ -148,12 +148,13 @@ func NewBolt5(
 			connReadTimeout: -1,
 		},
 		&outgoing{
-			chunker:    newChunker(),
-			packer:     packstream.Packer{},
+			chunker: newChunker(),
+			packer: packstream.Packer{
+				UseUtc: true,
+			},
 			onPackErr:  func(err error) { b.setError(err, true) },
 			onIoErr:    b.onIoError,
 			boltLogger: boltLog,
-			useUtc:     true,
 		},
 		b.onNextMessage,
 		b.onIoError,

@@ -125,7 +125,9 @@ func NewBolt3(
 	}
 	b.out = &outgoing{
 		chunker: newChunker(),
-		packer:  packstream.Packer{},
+		packer:  packstream.Packer{
+			UseUtc: false,
+		},
 		onPackErr: func(err error) {
 			if b.err == nil {
 				b.err = err
@@ -142,7 +144,6 @@ func NewBolt3(
 			b.state = bolt3_dead
 		},
 		boltLogger: boltLog,
-		useUtc:     false,
 	}
 	return b
 }

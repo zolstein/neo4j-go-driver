@@ -21,11 +21,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"time"
 )
 
 type Packer struct {
-	buf []byte
-	err error
+	buf    []byte
+	err    error
+	UseUtc bool
 }
 
 func (p *Packer) Begin(buf []byte) {
@@ -105,6 +107,10 @@ func (p *Packer) Uint16(i uint16) {
 
 func (p *Packer) Uint8(i uint8) {
 	p.Int64(int64(i))
+}
+
+func (p *Packer) Uint(i uint) {
+	p.Uint64(uint64(i))
 }
 
 func (p *Packer) Float64(f float64) {
@@ -231,6 +237,54 @@ func (p *Packer) Bool(b bool) {
 
 func (p *Packer) Nil() {
 	p.buf = append(p.buf, 0xc0)
+}
+
+func (p *Packer) Time(t time.Time) {
+	zone, _ := t.Zone()
+	zoneOffset := zone == "Offset"
+	switch {
+	case p.UseUtc && zoneOffset:
+		p.packUtcDateTimeWithTzOffset(t)
+	case p.UseUtc && !zoneOffset:
+		p.packUtcDateTimeWithTzName(t)
+	case !p.UseUtc && zoneOffset:
+		p.packLegacyDateTimeWithTzOffset(t)
+	case !p.UseUtc && !zoneOffset:
+		p.packLegacyDateTimeWithTzName(t)
+	}
+}
+
+// deprecated: remove once 4.x Neo4j all reach EOL
+func (p *Packer) packLegacyDateTimeWithTzOffset(dateTime time.Time) {
+	_, offset := dateTime.Zone()
+	p.StructHeader('F', 3)
+	p.Int64(dateTime.Unix() + int64(offset))
+	p.Int(dateTime.Nanosecond())
+	p.Int(offset)
+}
+
+// deprecated: remove once 4.x Neo4j all reach EOL
+func (p *Packer) packLegacyDateTimeWithTzName(dateTime time.Time) {
+	_, offset := dateTime.Zone()
+	p.StructHeader('f', 3)
+	p.Int64(dateTime.Unix() + int64(offset))
+	p.Int(dateTime.Nanosecond())
+	p.String(dateTime.Location().String())
+}
+
+func (p *Packer) packUtcDateTimeWithTzOffset(dateTime time.Time) {
+	_, offset := dateTime.Zone()
+	p.StructHeader('I', 3)
+	p.Int64(dateTime.Unix())
+	p.Int(dateTime.Nanosecond())
+	p.Int(offset)
+}
+
+func (p *Packer) packUtcDateTimeWithTzName(dateTime time.Time) {
+	p.StructHeader('i', 3)
+	p.Int64(dateTime.Unix())
+	p.Int(dateTime.Nanosecond())
+	p.String(dateTime.Location().String())
 }
 
 func (p *Packer) checkOverflowInt(i uint64) {

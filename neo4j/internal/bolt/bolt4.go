@@ -1109,7 +1109,7 @@ func (b *bolt4) onHelloSuccess(checkUtcPatch bool) func(*success) {
 		if checkUtcPatch {
 			useUtc := collections.SliceContains(helloSuccess.patches, "utc")
 			b.queue.in.hyd.useUtc = useUtc
-			b.queue.out.useUtc = useUtc
+			b.queue.out.packer.UseUtc = useUtc
 		}
 		b.connId = helloSuccess.connectionId
 		b.serverVersion = helloSuccess.server
